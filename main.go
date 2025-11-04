@@ -453,8 +453,8 @@ func getLocalizedComponent(componentType, lang string) (*LocalizedComponent, err
 	// Interpolate template
 	localizedTemplate := interpolateTemplate(template.Template, componentStrings)
 
-	// Generate component ID with timestamp
-	componentID := fmt.Sprintf("%s_%s_%d", componentType, lang, time.Now().UnixMilli()%10000)
+	// 🔧 FIX: Generate unique component ID with full nanosecond timestamp
+	componentID := fmt.Sprintf("%s_%s_%d", componentType, lang, time.Now().UnixNano())
 
 	return &LocalizedComponent{
 		ComponentName: template.ComponentName,
@@ -464,7 +464,7 @@ func getLocalizedComponent(componentType, lang string) (*LocalizedComponent, err
 		LocalizedData: componentStrings,
 		Metadata: ComponentMetadata{
 			ComponentID:  componentID,
-			LastUpdated:  "2024-01-15T10:30:00Z",
+			LastUpdated:  time.Now().UTC().Format(time.RFC3339), // 🔧 FIX: Use actual timestamp
 			RequiredKeys: template.RequiredKeys,
 		},
 	}, nil
@@ -499,10 +499,7 @@ func getLocalizedComponentEndpoint(c *gin.Context) {
 	// Check TTL cache first
 	if cached, found := componentCache.Get(cacheKey); found {
 		component := cached.(*LocalizedComponent)
-		// refresh the cache
-		componentCache.Put(cacheKey, component)
-		// refresh the redis cache
-		setInRedis(cacheKey, component)
+		// 🔧 FIX: Cache hit should just return, no writes needed
 		response := *component
 		response.Cached = true
 		c.JSON(http.StatusOK, response)
@@ -513,11 +510,8 @@ func getLocalizedComponentEndpoint(c *gin.Context) {
 	if redisClient != nil {
 		component, err := getFromRedis(cacheKey)
 		if err == nil && component != nil {
-			// Found in Redis, store in TTL cache
+			// 🔧 FIX: Found in Redis, store in TTL cache only (no Redis write)
 			componentCache.Put(cacheKey, component)
-
-			// Refresh Redis TTL
-			setInRedis(cacheKey, component)
 
 			response := *component
 			response.Cached = true
@@ -568,12 +562,25 @@ func main() {
 
 	router := gin.Default()
 
-	// Apply concurrency limiter middleware
-	router.Use(ConcurrencyLimiter(ConcurrencyLimit))
+	// 🔧 FIX: Add CORS middleware for frontend integration
+	router.Use(func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	})
 
-	// Routes
+	// 🔧 FIX: Health check should bypass concurrency limits
 	router.GET("/health", healthCheck)
-	router.GET("/api/component/:component_type", getLocalizedComponentEndpoint)
+
+	// Apply concurrency limiter middleware to API routes only
+	apiGroup := router.Group("/api")
+	apiGroup.Use(ConcurrencyLimiter(ConcurrencyLimit))
+	apiGroup.GET("/component/:component_type", getLocalizedComponentEndpoint)
 
 	// Start server
 	fmt.Println("🚀 Localization Manager Backend starting on :8000")
